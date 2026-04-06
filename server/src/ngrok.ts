@@ -42,36 +42,25 @@ async function doStartNgrok(port: number): Promise<string> {
   }
 
   const domain = process.env.CALLME_NGROK_DOMAIN || undefined;
+  const onStatus = (status: string) => {
+    console.error(`[ngrok] Status: ${status}`);
+    if (status === 'closed' && !intentionallyClosed) {
+      attemptReconnect();
+    }
+  };
 
   try {
     listener = await ngrok.forward({
-      addr: port,
-      authtoken,
-      domain,
-      onStatusChange: (status: string) => {
-        console.error(`[ngrok] Status: ${status}`);
-        if (status === 'closed' && !intentionallyClosed) {
-          attemptReconnect();
-        }
-      },
+      addr: port, authtoken, domain, onStatusChange: onStatus,
     });
   } catch (error: any) {
-    // ERR_NGROK_334: domain already bound by stale session
-    if (domain && error?.message?.includes('ERR_NGROK_334')) {
-      console.error('[ngrok] Domain in use by stale session, attempting cleanup...');
+    // ERR_NGROK_334: endpoint held by stale session — cleanup and retry once
+    if (error?.message?.includes('ERR_NGROK_334')) {
+      console.error('[ngrok] Endpoint held by stale session, cleaning up and retrying...');
       try { await ngrok.disconnect(); } catch { /* ignore */ }
       try { await ngrok.kill(); } catch { /* ignore */ }
-      // Retry once
       listener = await ngrok.forward({
-        addr: port,
-        authtoken,
-        domain,
-        onStatusChange: (status: string) => {
-          console.error(`[ngrok] Status: ${status}`);
-          if (status === 'closed' && !intentionallyClosed) {
-            attemptReconnect();
-          }
-        },
+        addr: port, authtoken, domain, onStatusChange: onStatus,
       });
     } else {
       throw error;

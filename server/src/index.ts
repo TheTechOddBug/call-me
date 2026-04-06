@@ -12,12 +12,26 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { CallManager, loadServerConfig } from './phone-call.js';
 import { startNgrok, stopNgrok } from './ngrok.js';
+import { ensureKokoroRunning } from './providers/tts-kokoro.js';
+import { loadProviderConfig } from './providers/index.js';
 
 async function main() {
   // Get port for HTTP server (default 0 = ephemeral, OS picks free port)
   const port = parseInt(process.env.CALLME_PORT || '0', 10);
 
-  // Load server config first (validates env vars, no network needed)
+  // Auto-setup Kokoro Docker container if needed (before config validation)
+  const providerConfig = loadProviderConfig();
+  if (providerConfig.ttsProvider === 'kokoro' && !providerConfig.kokoroUrl) {
+    try {
+      const kokoroBaseUrl = await ensureKokoroRunning();
+      process.env.CALLME_KOKORO_URL = `${kokoroBaseUrl}/v1`;
+    } catch (error) {
+      console.error('Kokoro setup failed:', error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  }
+
+  // Load server config (validates env vars, no network needed)
   let serverConfig;
   try {
     serverConfig = loadServerConfig('');
