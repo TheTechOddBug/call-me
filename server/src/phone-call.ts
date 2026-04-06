@@ -58,7 +58,7 @@ export function loadServerConfig(publicUrl: string): ServerConfig {
 
   return {
     publicUrl,
-    port: parseInt(process.env.CALLME_PORT || '3333', 10),
+    port: parseInt(process.env.CALLME_PORT || '0', 10),
     phoneNumber: providerConfig.phoneNumber,
     userPhoneNumber: process.env.CALLME_USER_PHONE_NUMBER!,
     providers,
@@ -80,7 +80,12 @@ export class CallManager {
     this.config = config;
   }
 
-  startServer(): void {
+  setPublicUrl(url: string): void {
+    this.config.publicUrl = url;
+  }
+
+  startServer(): Promise<number> {
+    return new Promise((resolve, reject) => {
     this.httpServer = createServer((req, res) => {
       const url = new URL(req.url!, `http://${req.headers.host}`);
 
@@ -199,9 +204,17 @@ export class CallManager {
       });
     });
 
-    this.httpServer.listen(this.config.port, () => {
-      console.error(`HTTP server listening on port ${this.config.port}`);
+    this.httpServer.once('error', (err: NodeJS.ErrnoException) => {
+      reject(err);
     });
+
+    this.httpServer.listen(this.config.port, () => {
+      const addr = this.httpServer!.address();
+      const boundPort = typeof addr === 'object' && addr ? addr.port : this.config.port;
+      console.error(`HTTP server listening on port ${boundPort}`);
+      resolve(boundPort);
+    });
+    }); // end Promise
   }
 
   /**
@@ -771,11 +784,36 @@ export class CallManager {
     return this.httpServer;
   }
 
-  shutdown(): void {
-    for (const callId of this.activeCalls.keys()) {
-      this.endCall(callId, 'Goodbye!').catch(console.error);
-    }
+  private _shutdownPromise: Promise<void> | null = null;
+
+  shutdown(): Promise<void> {
+    if (this._shutdownPromise) return this._shutdownPromise;
+    this._shutdownPromise = this._doShutdown();
+    return this._shutdownPromise;
+  }
+
+  private async _doShutdown(): Promise<void> {
+
+    // End active calls with 5s timeout
+    const endPromises = Array.from(this.activeCalls.keys()).map(callId =>
+      this.endCall(callId, 'Goodbye!').catch(err =>
+        console.error(`[shutdown] Failed to end ${callId}:`, err)
+      )
+    );
+    const timeout = new Promise<void>(resolve => setTimeout(resolve, 5000));
+    await Promise.race([Promise.allSettled(endPromises), timeout]);
+
+    // Terminate all WebSocket clients
+    this.wss?.clients.forEach(ws => ws.terminate());
     this.wss?.close();
-    this.httpServer?.close();
+
+    // Close HTTP server
+    await new Promise<void>(resolve => {
+      if (this.httpServer) {
+        this.httpServer.close(() => resolve());
+      } else {
+        resolve();
+      }
+    });
   }
 }

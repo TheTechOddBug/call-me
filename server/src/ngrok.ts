@@ -9,18 +9,25 @@ let currentPort: number | null = null;
 let currentUrl: string | null = null;
 let intentionallyClosed = false;
 let reconnectAttempts = 0;
+let reconnecting = false;
 const maxReconnectAttempts = 10;
 const baseReconnectDelayMs = 2000;
+let onUrlChangedCallback: ((url: string) => void) | null = null;
+let healthCheckInterval: ReturnType<typeof setInterval> | null = null;
 
 /**
  * Start ngrok tunnel to expose local port
  * @param port Local port to expose
  * @returns Public ngrok URL
  */
-export async function startNgrok(port: number): Promise<string> {
+export async function startNgrok(port: number, onUrlChanged?: (url: string) => void): Promise<string> {
+  // Clean up any leaked in-process listeners from a previous crash
+  try { await ngrok.kill(); } catch { /* ignore */ }
+
   intentionallyClosed = false;
   reconnectAttempts = 0;
   currentPort = port;
+  onUrlChangedCallback = onUrlChanged || null;
   return doStartNgrok(port);
 }
 
@@ -34,12 +41,42 @@ async function doStartNgrok(port: number): Promise<string> {
     );
   }
 
-  listener = await ngrok.forward({
-    addr: port,
-    authtoken,
-    // Use custom domain if configured (paid ngrok feature)
-    domain: process.env.CALLME_NGROK_DOMAIN || undefined,
-  });
+  const domain = process.env.CALLME_NGROK_DOMAIN || undefined;
+
+  try {
+    listener = await ngrok.forward({
+      addr: port,
+      authtoken,
+      domain,
+      onStatusChange: (status: string) => {
+        console.error(`[ngrok] Status: ${status}`);
+        if (status === 'closed' && !intentionallyClosed) {
+          attemptReconnect();
+        }
+      },
+    });
+  } catch (error: any) {
+    // ERR_NGROK_334: domain already bound by stale session
+    if (domain && error?.message?.includes('ERR_NGROK_334')) {
+      console.error('[ngrok] Domain in use by stale session, attempting cleanup...');
+      try { await ngrok.disconnect(); } catch { /* ignore */ }
+      try { await ngrok.kill(); } catch { /* ignore */ }
+      // Retry once
+      listener = await ngrok.forward({
+        addr: port,
+        authtoken,
+        domain,
+        onStatusChange: (status: string) => {
+          console.error(`[ngrok] Status: ${status}`);
+          if (status === 'closed' && !intentionallyClosed) {
+            attemptReconnect();
+          }
+        },
+      });
+    } else {
+      throw error;
+    }
+  }
 
   const url = listener.url();
   if (!url) {
@@ -60,8 +97,15 @@ async function doStartNgrok(port: number): Promise<string> {
  * Monitor tunnel health and reconnect if needed
  */
 async function monitorTunnel(): Promise<void> {
+  // Clear any previous health check interval to prevent leaks across reconnects
+  if (healthCheckInterval) {
+    clearInterval(healthCheckInterval);
+    healthCheckInterval = null;
+  }
+
   // Check tunnel health periodically
-  const checkInterval = setInterval(async () => {
+  healthCheckInterval = setInterval(async () => {
+    const checkInterval = healthCheckInterval!;
     if (intentionallyClosed) {
       clearInterval(checkInterval);
       return;
@@ -100,27 +144,28 @@ async function monitorTunnel(): Promise<void> {
  * Attempt to reconnect the ngrok tunnel
  */
 async function attemptReconnect(): Promise<void> {
-  if (intentionallyClosed || currentPort === null) {
+  if (reconnecting || intentionallyClosed || currentPort === null) {
     return;
   }
-
-  if (reconnectAttempts >= maxReconnectAttempts) {
-    console.error(`[ngrok] Max reconnect attempts (${maxReconnectAttempts}) reached, giving up`);
-    return;
-  }
-
-  reconnectAttempts++;
-  const delay = baseReconnectDelayMs * Math.pow(2, reconnectAttempts - 1);
-  console.error(`[ngrok] Reconnect attempt ${reconnectAttempts}/${maxReconnectAttempts} in ${delay}ms...`);
-
-  await new Promise(resolve => setTimeout(resolve, delay));
-
-  if (intentionallyClosed) {
-    console.error('[ngrok] Reconnect cancelled - tunnel intentionally closed');
-    return;
-  }
+  reconnecting = true;
 
   try {
+    if (reconnectAttempts >= maxReconnectAttempts) {
+      console.error(`[ngrok] Max reconnect attempts (${maxReconnectAttempts}) reached, giving up`);
+      return;
+    }
+
+    reconnectAttempts++;
+    const delay = baseReconnectDelayMs * Math.pow(2, reconnectAttempts - 1);
+    console.error(`[ngrok] Reconnect attempt ${reconnectAttempts}/${maxReconnectAttempts} in ${delay}ms...`);
+
+    await new Promise(resolve => setTimeout(resolve, delay));
+
+    if (intentionallyClosed) {
+      console.error('[ngrok] Reconnect cancelled - tunnel intentionally closed');
+      return;
+    }
+
     // Clean up old listener
     if (listener) {
       try {
@@ -131,19 +176,26 @@ async function attemptReconnect(): Promise<void> {
       listener = null;
     }
 
+    const previousUrl = currentUrl;
     const newUrl = await doStartNgrok(currentPort);
     console.error(`[ngrok] Reconnected successfully: ${newUrl}`);
 
-    // Note: The URL may have changed. For custom domains it stays the same,
-    // but for free ngrok the URL changes on each reconnect.
-    if (newUrl !== currentUrl) {
-      console.error(`[ngrok] WARNING: Tunnel URL changed from ${currentUrl} to ${newUrl}`);
+    // Notify if URL changed (free tier gets new URL on each reconnect)
+    if (newUrl !== previousUrl) {
+      console.error(`[ngrok] WARNING: Tunnel URL changed from ${previousUrl} to ${newUrl}`);
       console.error('[ngrok] Phone provider webhooks may need to be updated');
+      if (onUrlChangedCallback) {
+        onUrlChangedCallback(newUrl);
+      }
     }
   } catch (error) {
     console.error('[ngrok] Reconnect failed:', error);
-    // Try again
+    // Try again (reconnecting flag will be reset in finally)
+    reconnecting = false;
     attemptReconnect();
+    return;
+  } finally {
+    reconnecting = false;
   }
 }
 

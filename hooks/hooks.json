@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Claude is about to stop. Here is the context:\n$ARGUMENTS\n\nEvaluate whether Claude should call the user. ONLY return ok: false if Claude completed significant work and needs to discuss next steps, or is genuinely blocked and needs user input. Trivial tasks like reading files do not warrant a call.\n\nReturn {\"ok\": true} to let Claude stop, or {\"ok\": false, \"reason\": \"Use initiate_call to phone the user and discuss what was accomplished.\"} to keep Claude active for a call."
+          }
+        ]
+      }
+    ]
+  }
+}
