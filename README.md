@@ -19,7 +19,7 @@ Start a task, walk away. Your phone/watch rings when Claude is done, stuck, or n
 
 You'll need:
 - **Phone provider**: [Telnyx](https://telnyx.com) or [Twilio](https://twilio.com)
-- **OpenAI API key**: For speech-to-text and text-to-speech
+- **OpenAI API key**: For speech-to-text (and text-to-speech if not using Kokoro)
 - **ngrok account**: Free at [ngrok.com](https://ngrok.com) (for webhook tunneling)
 
 ### 2. Set Up Phone Provider
@@ -91,15 +91,17 @@ Add these to `~/.claude/settings.json` (recommended) or export them in your shel
 | `CALLME_PHONE_AUTH_TOKEN` | Telnyx API Key or Twilio Auth Token |
 | `CALLME_PHONE_NUMBER` | Phone number Claude calls from (E.164 format) |
 | `CALLME_USER_PHONE_NUMBER` | Your phone number to receive calls |
-| `CALLME_OPENAI_API_KEY` | OpenAI API key (for TTS and realtime STT) |
+| `CALLME_OPENAI_API_KEY` | OpenAI API key (required for STT; also for TTS unless using Kokoro) |
 | `CALLME_NGROK_AUTHTOKEN` | ngrok auth token for webhook tunneling |
 
 #### Optional Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CALLME_TTS_VOICE` | `onyx` | OpenAI voice: alloy, echo, fable, onyx, nova, shimmer |
-| `CALLME_PORT` | `3333` | Local HTTP server port |
+| `CALLME_TTS_PROVIDER` | `openai` | TTS engine: `openai` or `kokoro` (free, local — see [Kokoro TTS](#kokoro-tts-free-local)) |
+| `CALLME_TTS_VOICE` | `onyx` / `af_bella` | Voice name (default depends on TTS provider) |
+| `CALLME_KOKORO_URL` | - | URL of existing Kokoro instance (e.g. `http://localhost:8880/v1`). If unset, auto-starts Docker container |
+| `CALLME_PORT` | `0` (auto) | Local HTTP server port (0 = OS picks a free port) |
 | `CALLME_NGROK_DOMAIN` | - | Custom ngrok domain (paid feature) |
 | `CALLME_TRANSCRIPT_TIMEOUT_MS` | `180000` | Timeout for user speech (3 minutes) |
 | `CALLME_STT_SILENCE_DURATION_MS` | `800` | Silence duration to detect end of speech |
@@ -197,11 +199,34 @@ await end_call({
 | Outbound calls | ~$0.007/min | ~$0.014/min |
 | Phone number | ~$1/month | ~$1.15/month |
 
-Plus OpenAI costs (same for both providers):
-- **Speech-to-text**: ~$0.006/min (Whisper)
-- **Text-to-speech**: ~$0.02/min (TTS)
+Plus API costs (same for both phone providers):
+- **Speech-to-text**: ~$0.006/min (OpenAI gpt-4o-transcribe)
+- **Text-to-speech**: ~$0.02/min (OpenAI TTS) or **free** with Kokoro
 
-**Total**: ~$0.03-0.04/minute of conversation
+**Total**: ~$0.03-0.04/minute with OpenAI TTS, ~$0.01-0.02/minute with Kokoro
+
+---
+
+## Kokoro TTS (Free, Local)
+
+[Kokoro](https://github.com/remsky/Kokoro-FastAPI) is a free, local text-to-speech engine that runs via Docker. No TTS API key needed — just set one env var (note: `CALLME_OPENAI_API_KEY` is still required if you use the OpenAI API for speech-to-text):
+
+```bash
+CALLME_TTS_PROVIDER=kokoro
+```
+
+**Auto-setup:** If Docker is installed and port 8880 is free, the plugin automatically pulls and starts the Kokoro container on first use.
+
+**Existing instance:** If you already have Kokoro running (or want a custom port), point to it:
+
+```bash
+CALLME_TTS_PROVIDER=kokoro
+CALLME_KOKORO_URL=http://localhost:8880/v1
+```
+
+**Voices:** Kokoro has different voices than OpenAI. Query available voices at `http://localhost:8880/v1/audio/voices`. Popular choices: `af_bella`, `af_sky`, `am_adam`. Set with `CALLME_TTS_VOICE`.
+
+**Requirements:** Docker (for auto-setup) or an existing Kokoro instance.
 
 ---
 

@@ -1,6 +1,6 @@
 {
   "name": "callme",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Claude calls you on the phone when it needs your input or wants to report progress",
   "author": {
     "name": "ZeframLou",
@@ -20,24 +20,14 @@
         "CALLME_PHONE_NUMBER": "${CALLME_PHONE_NUMBER}",
         "CALLME_USER_PHONE_NUMBER": "${CALLME_USER_PHONE_NUMBER}",
         "CALLME_OPENAI_API_KEY": "${CALLME_OPENAI_API_KEY}",
-        "CALLME_TTS_VOICE": "${CALLME_TTS_VOICE:-onyx}",
+        "CALLME_TTS_VOICE": "${CALLME_TTS_VOICE}",
         "CALLME_NGROK_AUTHTOKEN": "${CALLME_NGROK_AUTHTOKEN}",
-        "CALLME_PORT": "${CALLME_PORT:-3333}",
+        "CALLME_PORT": "${CALLME_PORT:-0}",
         "CALLME_TRANSCRIPT_TIMEOUT_MS": "${CALLME_TRANSCRIPT_TIMEOUT_MS:-180000}",
-        "CALLME_STT_SILENCE_DURATION_MS": "${CALLME_STT_SILENCE_DURATION_MS:-800}"
+        "CALLME_STT_SILENCE_DURATION_MS": "${CALLME_STT_SILENCE_DURATION_MS:-800}",
+        "CALLME_TTS_PROVIDER": "${CALLME_TTS_PROVIDER:-openai}",
+        "CALLME_KOKORO_URL": "${CALLME_KOKORO_URL:-}"
       }
     }
-  },
-  "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "prompt",
-            "prompt": "SILENTLY evaluate if you should call the user. ONLY use initiate_call if you completed significant work and need to discuss next steps, or are genuinely blocked. Do NOT output any text - either call or do nothing."
-          }
-        ]
-      }
-    ]
   }
 }

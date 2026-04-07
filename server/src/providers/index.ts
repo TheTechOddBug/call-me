@@ -9,15 +9,20 @@ import type { PhoneProvider, TTSProvider, RealtimeSTTProvider, ProviderRegistry 
 import { TelnyxPhoneProvider } from './phone-telnyx.js';
 import { TwilioPhoneProvider } from './phone-twilio.js';
 import { OpenAITTSProvider } from './tts-openai.js';
+import { KokoroTTSProvider } from './tts-kokoro.js';
 import { OpenAIRealtimeSTTProvider } from './stt-openai-realtime.js';
 
 export * from './types.js';
 
 export type PhoneProviderType = 'telnyx' | 'twilio';
+export type TTSProviderType = 'openai' | 'kokoro';
 
 export interface ProviderConfig {
   // Phone provider selection
   phoneProvider: PhoneProviderType;
+
+  // TTS provider selection
+  ttsProvider: TTSProviderType;
 
   // Phone credentials (interpretation depends on provider)
   // Telnyx: accountSid = Connection ID, authToken = API Key
@@ -30,11 +35,14 @@ export interface ProviderConfig {
   // Get from: Mission Control > Account Settings > Keys & Credentials > Public Key
   telnyxPublicKey?: string;
 
-  // OpenAI (TTS + STT)
+  // OpenAI (STT, and TTS when ttsProvider is 'openai')
   openaiApiKey: string;
   ttsVoice?: string;
   sttModel?: string;
   sttSilenceDurationMs?: number;
+
+  // Kokoro TTS (when ttsProvider is 'kokoro')
+  kokoroUrl?: string;
 }
 
 export function loadProviderConfig(): ProviderConfig {
@@ -44,17 +52,20 @@ export function loadProviderConfig(): ProviderConfig {
 
   // Default to telnyx if not specified
   const phoneProvider = (process.env.CALLME_PHONE_PROVIDER || 'telnyx') as PhoneProviderType;
+  const ttsProvider = (process.env.CALLME_TTS_PROVIDER || 'openai') as TTSProviderType;
 
   return {
     phoneProvider,
+    ttsProvider,
     phoneAccountSid: process.env.CALLME_PHONE_ACCOUNT_SID || '',
     phoneAuthToken: process.env.CALLME_PHONE_AUTH_TOKEN || '',
     phoneNumber: process.env.CALLME_PHONE_NUMBER || '',
     telnyxPublicKey: process.env.CALLME_TELNYX_PUBLIC_KEY,
     openaiApiKey: process.env.CALLME_OPENAI_API_KEY || '',
-    ttsVoice: process.env.CALLME_TTS_VOICE || 'onyx',
+    ttsVoice: process.env.CALLME_TTS_VOICE || undefined,
     sttModel: process.env.CALLME_STT_MODEL || 'gpt-4o-transcribe',
     sttSilenceDurationMs,
+    kokoroUrl: process.env.CALLME_KOKORO_URL,
   };
 }
 
@@ -77,6 +88,15 @@ export function createPhoneProvider(config: ProviderConfig): PhoneProvider {
 }
 
 export function createTTSProvider(config: ProviderConfig): TTSProvider {
+  if (config.ttsProvider === 'kokoro') {
+    const provider = new KokoroTTSProvider();
+    provider.initialize({
+      apiUrl: config.kokoroUrl,
+      voice: config.ttsVoice || 'af_bella',
+    });
+    return provider;
+  }
+
   const provider = new OpenAITTSProvider();
   provider.initialize({
     apiKey: config.openaiApiKey,
@@ -124,7 +144,7 @@ export function validateProviderConfig(config: ProviderConfig): string[] {
     errors.push('Missing CALLME_PHONE_NUMBER');
   }
   if (!config.openaiApiKey) {
-    errors.push('Missing CALLME_OPENAI_API_KEY');
+    errors.push('Missing CALLME_OPENAI_API_KEY (required for speech-to-text, even when using Kokoro TTS)');
   }
 
   return errors;

@@ -6,6 +6,12 @@
   "plugins": [
     {
       "name": "callme",
+      "description": "Claude calls you on the phone when it needs your input or wants to report progress",
+      "version": "1.0.3",
+      "author": {
+        "name": "ZeframLou",
+        "url": "https://github.com/ZeframLou"
+      },
       "source": "./"
     }
   ]

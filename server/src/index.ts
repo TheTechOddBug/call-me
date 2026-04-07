@@ -12,35 +12,59 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { CallManager, loadServerConfig } from './phone-call.js';
 import { startNgrok, stopNgrok } from './ngrok.js';
+import { ensureKokoroRunning } from './providers/tts-kokoro.js';
+import { loadProviderConfig } from './providers/index.js';
 
 async function main() {
-  // Get port for HTTP server
-  const port = parseInt(process.env.CALLME_PORT || '3333', 10);
+  // Get port for HTTP server (default 0 = ephemeral, OS picks free port)
+  const port = parseInt(process.env.CALLME_PORT || '0', 10);
 
-  // Start ngrok tunnel to get public URL
+  // Auto-setup Kokoro Docker container if needed (before config validation)
+  const providerConfig = loadProviderConfig();
+  if (providerConfig.ttsProvider === 'kokoro' && !providerConfig.kokoroUrl) {
+    try {
+      const kokoroBaseUrl = await ensureKokoroRunning();
+      process.env.CALLME_KOKORO_URL = `${kokoroBaseUrl}/v1`;
+    } catch (error) {
+      console.error('Kokoro setup failed:', error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  }
+
+  // Load server config (validates env vars, no network needed)
+  let serverConfig;
+  try {
+    serverConfig = loadServerConfig('');
+  } catch (error) {
+    console.error('Configuration error:', error instanceof Error ? error.message : error);
+    process.exit(1);
+  }
+
+  // Create call manager and bind HTTP server FIRST (before ngrok)
+  const callManager = new CallManager(serverConfig);
+  let actualPort: number;
+  try {
+    actualPort = await callManager.startServer();
+  } catch (error) {
+    console.error('Failed to start HTTP server:', error instanceof Error ? error.message : error);
+    process.exit(1);
+  }
+
+  // Start ngrok tunnel pointing at the actual bound port
   console.error('Starting ngrok tunnel...');
   let publicUrl: string;
   try {
-    publicUrl = await startNgrok(port);
+    publicUrl = await startNgrok(actualPort, (newUrl) => {
+      console.error(`[ngrok] Updating public URL to: ${newUrl}`);
+      callManager.setPublicUrl(newUrl);
+    });
+    callManager.setPublicUrl(publicUrl);
     console.error(`ngrok tunnel: ${publicUrl}`);
   } catch (error) {
     console.error('Failed to start ngrok:', error instanceof Error ? error.message : error);
+    await callManager.shutdown();
     process.exit(1);
   }
-
-  // Load server config with the ngrok URL
-  let serverConfig;
-  try {
-    serverConfig = loadServerConfig(publicUrl);
-  } catch (error) {
-    console.error('Configuration error:', error instanceof Error ? error.message : error);
-    await stopNgrok();
-    process.exit(1);
-  }
-
-  // Create call manager and start HTTP server for webhooks
-  const callManager = new CallManager(serverConfig);
-  callManager.startServer();
 
   // Create stdio MCP server
   const mcpServer = new Server(
@@ -168,16 +192,33 @@ async function main() {
   console.error(`Providers: phone=${serverConfig.providers.phone.name}, tts=${serverConfig.providers.tts.name}, stt=${serverConfig.providers.stt.name}`);
   console.error('');
 
-  // Graceful shutdown
-  const shutdown = async () => {
-    console.error('\nShutting down...');
-    callManager.shutdown();
-    await stopNgrok();
-    process.exit(0);
+  // Idempotent graceful shutdown
+  let shutdownPromise: Promise<void> | null = null;
+  const shutdownOnce = (reason: string, exitCode = 0): Promise<void> => {
+    if (!shutdownPromise) {
+      shutdownPromise = (async () => {
+        console.error(`\nShutting down (${reason})...`);
+        await callManager.shutdown();
+        await stopNgrok();
+        process.exit(exitCode);
+      })();
+    }
+    return shutdownPromise;
   };
 
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => shutdownOnce('SIGINT'));
+  process.on('SIGTERM', () => shutdownOnce('SIGTERM'));
+  process.on('SIGHUP', () => shutdownOnce('SIGHUP'));
+  process.stdin.on('close', () => shutdownOnce('stdin closed'));
+  process.stdin.on('end', () => shutdownOnce('stdin ended'));
+  process.on('uncaughtException', (err) => {
+    console.error('Uncaught exception:', err);
+    shutdownOnce('uncaughtException', 1);
+  });
+  process.on('unhandledRejection', (err) => {
+    console.error('Unhandled rejection:', err);
+    shutdownOnce('unhandledRejection', 1);
+  });
 }
 
 main().catch((error) => {
